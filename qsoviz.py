@@ -27,24 +27,56 @@ __author__ = 'Michael R. McPherson <mcpherson@acm.org>'
 
 import json
 import time
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, timezone, tzinfo, timedelta
 import mysql.connector
 from hamutils.adif import ADIReader
+from hamutils.qrz import Qrz
+from influxdb import InfluxDBClient
 
 
 def main():
 
     program_name = 'qsoviz'
     program_version = '1.0'
-    db_name = 'aarcfd'
+    db_host = 'localhost'
+    db_port = 8086
+    db_name = 'aarc'
     db_user = 'root'
+    qrz_user = 'KQ9P'
+    json_qso_location = [
+        {
+            "measurement": "qso_location",
+            "tags": {
+                "call": 'Text',
+                "operator": "Text"
+    },
+            "time": "2009-11-10T23:00:00Z",
+            "fields": {
+                "state": 'Text'
+            }
+        }
+    ]
+    json_qso_rate = [
+        {
+            "measurement": "qso_rate",
+            "tags": {
+                "call": 'Text',
+                "operator": "Text"
+            },
+            "time": "2009-11-10T23:00:00Z",
+            "fields": {
+                "rate": 1.0
+            }
+        }
+    ]
     demo_mode = True
     demo_timescale = (24.0 * 60.0) / 2.0
 
-    key_fp = open('db_password.json', "r")
+    key_fp = open('passwords.json', "r")
     json_return = json.load(key_fp)
     key_fp.close()
     db_password = json_return['db_password'].encode()
+    qrz_password = json_return['qrz_password'].encode()
 
     if demo_mode:
         time_start = datetime(2016, 6, 25, 18, 0, 0, tzinfo=timezone.utc)
@@ -55,6 +87,11 @@ def main():
     run_start_time = datetime.utcnow()
     last_loop_time = run_start_time
 
+    client = InfluxDBClient(db_host, db_port, db_user, db_password, db_name)
+    client.drop_database(db_name)
+    client.create_database(db_name)
+    client.create_retention_policy('default_policy', 'INF', 3, default=True)
+
     while True:
         current_time = datetime.utcnow()
         time_elapsed = current_time - run_start_time
@@ -63,66 +100,55 @@ def main():
 
         adif_fp = open('aarcfd2016.adi', 'r')
         aarc_adi = ADIReader(adif_fp)
+        aarc_adi_sortable = {}
         for qso in aarc_adi:
-            print(qso)
+            aarc_adi_sortable.update({qso['datetime_on'] : qso})
+
+        rate_counts = {'total' : 0}
+        rate_rates = {'total' : 0.0}
+        rate_last_datetime = -1
+        for key in sorted(aarc_adi_sortable.keys()):
+            a_datetime_on = aarc_adi_sortable[key]['datetime_on'].strftime("2018-04-%dT%H:%M:%SZ")
+            a_call = aarc_adi_sortable[key]['call'].upper()
+            a_n3fjp_modecontest = aarc_adi_sortable[key].get('n3fjp_modecontest', 'NONE').upper()
+            a_band = aarc_adi_sortable[key].get('band', 'NONE').upper()
+            a_state = aarc_adi_sortable[key].get('state', 'NONE').upper()
+            a_arrl_sect =  aarc_adi_sortable[key].get('arrl_sect', 'NONE').upper()
+            a_country =  aarc_adi_sortable[key].get('country', 'NONE').upper()
+            a_n3fjp_initials =  aarc_adi_sortable[key].get('n3fjp_initials', 'NONE').upper()
+            a_operator =  aarc_adi_sortable[key].get('operator', 'NONE').upper()
+            a_class =  aarc_adi_sortable[key].get('class', 'NONE').upper()
+
+            if rate_last_datetime == -1:
+                rate_last_datetime = aarc_adi_sortable[key]['datetime_on']
+            rate_diff_datetime = (aarc_adi_sortable[key]['datetime_on'] - rate_last_datetime)
+            if (rate_diff_datetime >= timedelta(minutes=5)):
+                for rate_key in rate_counts.keys():
+                    if rate_counts[rate_key] == 0:
+                        rate_rates.update({rate_key : 0.0})
+                    else:
+                        rate_rates[rate_key] = ((rate_counts[rate_key] / rate_diff_datetime.seconds) * 3600.0)
+                    json_qso_rate[0].update({'time' : a_datetime_on})
+                    json_qso_rate[0]['fields'].update({'rate' : rate_rates[rate_key]})
+                    json_qso_rate[0]['tags'].update({'call' : a_call})
+                    json_qso_rate[0]['tags'].update({'operator' : rate_key})
+                    rate_counts.update({rate_key : 0})
+                    rate_last_datetime = aarc_adi_sortable[key]['datetime_on']
+                    client.write_points(json_qso_rate)
+            rate_counts.update({'total' : (rate_counts['total'] + 1)})
+            if a_operator in rate_counts:
+                rate_counts.update({a_operator : (rate_counts[a_operator] + 1)})
+            else:
+                rate_counts.update({a_operator : 1})
+
+            json_qso_location[0].update({'time' : a_datetime_on})
+            json_qso_location[0]['tags'].update({'call' : a_call})
+            json_qso_location[0]['fields'].update({'state' : a_state})
+            json_qso_location[0]['tags'].update({'operator' : a_operator})
+            client.write_points(json_qso_location)
+
         adif_fp.close()
         break
-        time.sleep(5)
-"""
-        #cnx = mysql.connector.connect(user=db_user, password=db_password, database=db_name)
-        #cursor = cnx.cursor()
-        sql_command = ('INSERT INTO ' + db_name + ' '
-                       '(timeUTC, '
-                       'panelTempT1, '
-                       'panelTempT2, '
-                       'panelTempT3, '
-                       'panelTempT4, '
-                       'panelTempT5, '
-                       'panelVoltageV1, '
-                       'panelVoltageV2, '
-                       'panelVoltageV3, '
-                       'panelVoltageV4, '
-                       'panelVoltageV5, '
-                       'batteryVoltageB1, '
-                       'batteryVoltageB2, '
-                       'batteryVoltageB3, '
-                       'batteryVoltageB4, '
-                       'motherboardTemp, '
-                       'uncontrolledResets, '
-                       'mcuResets, '
-                       'readWriteResets, '
-                       'sdErrors, '
-                       'antennaStatus) '
-                       'VALUES '
-                       '(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)')
-
-        sql_data = ("{:s}".format(time_utc),
-                    "{:.2f}".format(panel_temp_px_t1),
-                    "{:.2f}".format(panel_temp_mx_t2),
-                    "{:.2f}".format(panel_temp_py_t3),
-                    "{:.2f}".format(panel_temp_my_t4),
-                    "{:.2f}".format(panel_temp_mz_t5),
-                    "{:.2f}".format(panel_voltage_px_v1),
-                    "{:.2f}".format(panel_voltage_mx_v2),
-                    "{:.2f}".format(panel_voltage_py_v3),
-                    "{:.2f}".format(panel_voltage_my_v4),
-                    "{:.2f}".format(panel_voltage_mz_v5),
-                    "{:.2f}".format(battery_voltage_b1),
-                    "{:.2f}".format(battery_voltage_b2),
-                    "{:.2f}".format(battery_voltage_b3),
-                    "{:.2f}".format(battery_voltage_b4),
-                    "{:.2f}".format(motherboard_temp),
-                    "{:d}".format(uncontrolled_resets),
-                    "{:d}".format(mcu_resets),
-                    "{:d}".format(read_write_resets),
-                    "{:d}".format(sd_errors),
-                    "{:d}".format(antenna_status))
-        
-        cursor.execute(sql_command, sql_data)
-        cnx.commit()
-        cursor.close()
-        cnx.close()
-    """
 
 
 if __name__ == "__main__":
