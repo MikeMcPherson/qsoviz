@@ -29,7 +29,6 @@ import json
 import time
 from datetime import datetime, timezone, tzinfo, timedelta
 import mysql.connector
-from hamutils.adif import ADIReader
 from hamutils.qrz import Qrz
 from influxdb import InfluxDBClient
 
@@ -43,6 +42,8 @@ def main():
     db_name = 'aarc'
     db_user = 'root'
     qrz_user = 'KQ9P'
+    mysql_query = ("SELECT datetime_on, n3fjp_modecontest, band, state, country, operator "
+             "FROM aarc_fd WHERE datetime_on BETWEEN %s AND %s ORDER BY datetime_on ASC")
     json_qso_location = [
         {
             "measurement": "qso_location",
@@ -56,9 +57,9 @@ def main():
             }
         }
     ]
-    json_qso_rate = [
+    json_op_rates = [
         {
-            "measurement": "qso_rate",
+            "measurement": "op_rate",
             "tags": {
                 "call": 'Text',
                 "operator": "Text"
@@ -69,8 +70,21 @@ def main():
             }
         }
     ]
+    json_mode_rates = [
+        {
+            "measurement": "mode_rate",
+            "tags": {
+                "call": 'Text',
+                "mode": "Text"
+            },
+            "time": "2009-11-10T23:00:00Z",
+            "fields": {
+                "rate": 1.0
+            }
+        }
+    ]
     demo_mode = True
-    demo_timescale = (24.0 * 60.0) / 2.0
+    demo_timescale = 3600.0
 
     key_fp = open('passwords.json', "r")
     json_return = json.load(key_fp)
@@ -84,71 +98,82 @@ def main():
     else:
         time_start = datetime(2018, 6, 23, 18, 0, 0, tzinfo=timezone.utc)
         time_end = datetime(2018, 6, 24, 18, 0, 0, tzinfo=timezone.utc)
-    run_start_time = datetime.utcnow()
-    last_loop_time = run_start_time
+    last_loop_time = datetime.now(tz=timezone.utc)
+    time_query_end = time_start
+
+    cnx = mysql.connector.connect(user=db_user, password=db_password, database=db_name)
+    cursor = cnx.cursor()
 
     client = InfluxDBClient(db_host, db_port, db_user, db_password, db_name)
     client.drop_database(db_name)
     client.create_database(db_name)
     client.create_retention_policy('default_policy', 'INF', 3, default=True)
 
-    while True:
-        current_time = datetime.utcnow()
-        time_elapsed = current_time - run_start_time
-        if demo_mode:
-            current_time = (time_start + (time_elapsed * demo_timescale))
+    op_counts = {}
+    op_rates = {}
+    mode_counts = {'TOTAL': 0, 'PH': 0, 'CW': 0, 'DIG': 0}
+    mode_rates = {'TOTAL': 0.0, 'PH': 0.0, 'CW': 0.0, 'DIG': 0.0}
+    rate_last_datetime = -1
 
-        adif_fp = open('aarcfd2016.adi', 'r')
-        aarc_adi = ADIReader(adif_fp)
-        aarc_adi_sortable = {}
-        for qso in aarc_adi:
-            aarc_adi_sortable.update({qso['datetime_on'] : qso})
+    while time_query_end < time_end:
+        time_clock = datetime.now(tz=timezone.utc)
+        time_elapsed = (time_clock - last_loop_time)
+        time_query_start = time_query_end
+        time_query_end = (time_query_start + (time_elapsed * demo_timescale))
+        last_loop_time = time_clock
+        mysql_data = (time_query_start, time_query_end)
+        cursor.execute(mysql_query, mysql_data)
+        print(cursor.statement)
 
-        rate_counts = {'total' : 0}
-        rate_rates = {'total' : 0.0}
-        rate_last_datetime = -1
-        for key in sorted(aarc_adi_sortable.keys()):
-            a_datetime_on = aarc_adi_sortable[key]['datetime_on'].strftime("2018-04-%dT%H:%M:%SZ")
-            a_call = aarc_adi_sortable[key]['call'].upper()
-            a_n3fjp_modecontest = aarc_adi_sortable[key].get('n3fjp_modecontest', 'NONE').upper()
-            a_band = aarc_adi_sortable[key].get('band', 'NONE').upper()
-            a_state = aarc_adi_sortable[key].get('state', 'NONE').upper()
-            a_arrl_sect =  aarc_adi_sortable[key].get('arrl_sect', 'NONE').upper()
-            a_country =  aarc_adi_sortable[key].get('country', 'NONE').upper()
-            a_n3fjp_initials =  aarc_adi_sortable[key].get('n3fjp_initials', 'NONE').upper()
-            a_operator =  aarc_adi_sortable[key].get('operator', 'NONE').upper()
-            a_class =  aarc_adi_sortable[key].get('class', 'NONE').upper()
-
+        for (datetime_on, n3fjp_modecontest, band, state, country, operator) in cursor:
             if rate_last_datetime == -1:
-                rate_last_datetime = aarc_adi_sortable[key]['datetime_on']
-            rate_diff_datetime = (aarc_adi_sortable[key]['datetime_on'] - rate_last_datetime)
+                rate_last_datetime = datetime_on
+            rate_diff_datetime = datetime_on - rate_last_datetime
+
             if (rate_diff_datetime >= timedelta(minutes=5)):
-                for rate_key in rate_counts.keys():
-                    if rate_counts[rate_key] == 0:
-                        rate_rates.update({rate_key : 0.0})
-                    else:
-                        rate_rates[rate_key] = ((rate_counts[rate_key] / rate_diff_datetime.seconds) * 3600.0)
-                    json_qso_rate[0].update({'time' : a_datetime_on})
-                    json_qso_rate[0]['fields'].update({'rate' : rate_rates[rate_key]})
-                    json_qso_rate[0]['tags'].update({'call' : a_call})
-                    json_qso_rate[0]['tags'].update({'operator' : rate_key})
-                    rate_counts.update({rate_key : 0})
-                    rate_last_datetime = aarc_adi_sortable[key]['datetime_on']
-                    client.write_points(json_qso_rate)
-            rate_counts.update({'total' : (rate_counts['total'] + 1)})
-            if a_operator in rate_counts:
-                rate_counts.update({a_operator : (rate_counts[a_operator] + 1)})
+                for op_key in op_counts.keys():
+                    if op_counts[op_key] > 0:
+                        op_rates.update({op_key : ((op_counts[op_key] / rate_diff_datetime.seconds) * 3600.0)})
+                        json_op_rates[0].update({'time' : datetime_on})
+                        json_op_rates[0]['fields'].update({'rate' : op_rates[op_key]})
+#                        json_op_rates[0]['tags'].update({'call' : call})
+                        json_op_rates[0]['tags'].update({'operator' : op_key})
+                        client.write_points(json_op_rates)
+                    op_counts.update({op_key : 0})
+                for mode_key in mode_counts.keys():
+                    if mode_counts[mode_key] > 0:
+                        mode_rates.update({mode_key : ((mode_counts[mode_key] / rate_diff_datetime.seconds) * 3600.0)})
+                        json_mode_rates[0].update({'time' : datetime_on})
+                        json_mode_rates[0]['fields'].update({'rate' : mode_rates[mode_key]})
+#                        json_mode_rates[0]['tags'].update({'call' : call})
+                        json_mode_rates[0]['tags'].update({'mode' : mode_key})
+                        client.write_points(json_mode_rates)
+                    mode_counts.update({mode_key : 0})
+                rate_last_datetime = datetime_on
+
+            if operator in op_counts:
+                op_counts.update({operator : (op_counts[operator] + 1)})
             else:
-                rate_counts.update({a_operator : 1})
+                op_counts.update({operator : 1})
+            mode_counts.update({'TOTAL' : (mode_counts['TOTAL'] + 1)})
+            if n3fjp_modecontest == 'PH':
+                mode_counts.update({'PH': (mode_counts['PH'] + 1)})
+            elif n3fjp_modecontest == 'CW':
+                mode_counts.update({'CW': (mode_counts['CW'] + 1)})
+            elif n3fjp_modecontest == 'DIG':
+                mode_counts.update({'DIG': (mode_counts['DIG'] + 1)})
+            else:
+                print(n3fjp_modecontest)
 
-            json_qso_location[0].update({'time' : a_datetime_on})
-            json_qso_location[0]['tags'].update({'call' : a_call})
-            json_qso_location[0]['fields'].update({'state' : a_state})
-            json_qso_location[0]['tags'].update({'operator' : a_operator})
+            json_qso_location[0].update({'time' : datetime_on})
+#            json_qso_location[0]['tags'].update({'call' : call})
+            json_qso_location[0]['fields'].update({'state' : state})
+            json_qso_location[0]['tags'].update({'operator' : operator})
             client.write_points(json_qso_location)
+        time.sleep(2)
 
-        adif_fp.close()
-        break
+    cursor.close()
+    cnx.close()
 
 
 if __name__ == "__main__":
