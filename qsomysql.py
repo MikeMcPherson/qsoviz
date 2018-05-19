@@ -31,6 +31,7 @@ from datetime import datetime, timezone, tzinfo, timedelta
 import mysql.connector
 from hamutils.adif import ADIReader
 from qrz import QRZ
+import geohash2
 
 
 def main():
@@ -60,17 +61,18 @@ def main():
                "(datetime_on, callsign, n3fjp_modecontest, band, state, arrl_sect, country, "
                + "n3fjp_initials, operator, class, latitude, longitude, geohash) "
                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+    query_qso = ("SELECT datetime_on, callsign FROM aarc_fd WHERE datetime_on = %s")
 
     adif_fp = open('aarcfd2016.adi', 'r')
     aarc_adi = ADIReader(adif_fp)
-    rsecs = []
     for qso in aarc_adi:
-        rsec = random.random()
-        while rsec in rsecs:
-            rsec = random.random()
-            print(rsec)
-        rsecs.append(rsec)
-        a_datetime_on = qso['datetime_on'] + timedelta(seconds=rsec)
+        a_datetime_on = qso['datetime_on']
+        query_qso_data = (a_datetime_on,)
+        cursor.execute(query_qso, query_qso_data)
+        result = cursor.fetchall()
+        if result:
+            print(result)
+            a_datetime_on = qso['datetime_on'] + timedelta(seconds=random.random())
         a_callsign = qso['call'].upper()
         a_n3fjp_modecontest = qso.get('n3fjp_modecontest', 'NONE').upper()
         a_band = qso.get('band', 'NONE').upper()
@@ -83,20 +85,19 @@ def main():
         try:
             qrz_result = qrz.callsign(a_callsign)
         except:
-            print("Not found ", a_callsign)
+            pass
         if (('lat' in qrz_result.keys()) and ('lon' in qrz_result.keys())):
-            a_latitude = qrz_result['lat']
-            a_longitude = qrz_result['lon']
+            a_latitude = float(qrz_result['lat'])
+            a_longitude = float(qrz_result['lon'])
         else:
             a_latitude = states_coords[a_state][0]
             a_longitude = states_coords[a_state][1]
-        a_geohash = 'aaaaa'
-        data_qso = (a_datetime_on, a_callsign, a_n3fjp_modecontest, a_band, a_state, a_arrl_sect, a_country,
+        a_geohash = geohash2.encode(a_latitude, a_longitude, precision=5)
+        add_qso_data = (a_datetime_on, a_callsign, a_n3fjp_modecontest, a_band, a_state, a_arrl_sect, a_country,
                     a_n3fjp_initials, a_operator, a_class, a_latitude, a_longitude, a_geohash)
-        print(data_qso)
-        cursor.execute(add_qso, data_qso)
+        cursor.execute(add_qso, add_qso_data)
+        cnx.commit()
     adif_fp.close()
-    cnx.commit()
     cursor.close()
     cnx.close()
 
