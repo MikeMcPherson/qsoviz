@@ -27,9 +27,8 @@ __author__ = 'Michael R. McPherson <mcpherson@acm.org>'
 
 import json
 import time
-from datetime import datetime, timezone, tzinfo, timedelta
+from datetime import datetime, timezone, timedelta
 import mysql.connector
-from hamutils.qrz import Qrz
 from influxdb import InfluxDBClient
 
 
@@ -41,24 +40,25 @@ def main():
     db_port = 8086
     db_name = 'aarc'
     db_user = 'root'
-    qrz_user = 'KQ9P'
-    mysql_query = ("SELECT datetime_on, callsign, n3fjp_modecontest, band, state, country, operator, "
-                   + "latitude, longitude, geohash "
-                    "FROM aarc_fd WHERE datetime_on BETWEEN %s AND %s ORDER BY datetime_on ASC")
+    mysql_query = ('SELECT datetime_on, callsign, n3fjp_modecontest, band, state, country, operator, '
+                   + 'latitude, longitude, geohash '
+                     'FROM aarc_fd WHERE datetime_on BETWEEN %s AND %s ORDER BY datetime_on ASC')
     json_qso_location = [
         {
             "measurement": "qso_location",
             "tags": {
-                "operator": "Text",
-                "band": "Text",
-                "state": "Text",
+                "Operator": "Text",
+                "Band": "Text",
+                "Mode": "Text",
+                "State": "Text",
                 "geohash": "Text"
-    },
+            },
             "time": "2009-11-10T23:00:00Z",
             "fields": {
-                "callsign": "Text",
-                "band": "Text",
-                "state": "Text"
+                "Callsign": "Text",
+                "Band": "Text",
+                "Mode": "Text",
+                "State": "Text"
             }
         }
     ]
@@ -66,12 +66,13 @@ def main():
         {
             "measurement": "op_rate",
             "tags": {
-                "callsign": "Text",
-                "operator": "Text"
+                "Callsign": "Text",
+                "Operator": "Text"
             },
             "time": "2009-11-10T23:00:00Z",
             "fields": {
-                "rate": 1.0
+                "Rate": 1.0,
+                "Contacts": 1.0
             }
         }
     ]
@@ -79,12 +80,12 @@ def main():
         {
             "measurement": "mode_rate",
             "tags": {
-                "callsign": "Text",
-                "mode": "Text"
+                "Callsign": "Text",
+                "Mode": "Text"
             },
             "time": "2009-11-10T23:00:00Z",
             "fields": {
-                "rate": 1.0
+                "Rate": 1.0
             }
         }
     ]
@@ -92,22 +93,24 @@ def main():
         {
             "measurement": "qso_points",
             "tags": {
-                "mode": "Text"
+                "Mode": "Text"
             },
             "time": "2009-11-10T23:00:00Z",
             "fields": {
-                "points": 1.0
+                "Points": 1.0,
+                "Contacts": 1.0
             }
         }
     ]
     demo_mode = True
     demo_timescale = 3600.0
 
+    print(program_name, program_version)
+
     key_fp = open('passwords.json', "r")
     json_return = json.load(key_fp)
     key_fp.close()
     db_password = json_return['db_password'].encode()
-    qrz_password = json_return['qrz_password'].encode()
 
     if demo_mode:
         time_start = datetime(2016, 6, 25, 18, 0, 0, tzinfo=timezone.utc)
@@ -124,11 +127,13 @@ def main():
     client = InfluxDBClient(db_host, db_port, db_user, db_password, db_name)
     client.drop_database(db_name)
     client.create_database(db_name)
-    client.create_retention_policy('default_policy', 'INF', 3, default=True)
+    client.create_retention_policy('default_policy', 'INF', '3', default=True)
 
     op_counts = {}
+    op_totals = {}
     op_rates = {}
     mode_counts = {'TOTAL': 0, 'PH': 0, 'CW': 0, 'DIG': 0}
+    mode_totals = {'TOTAL': 0, 'PH': 0, 'CW': 0, 'DIG': 0}
     mode_points = {'TOTAL': 0, 'PH': 0, 'CW': 0, 'DIG': 0}
     mode_rates = {'TOTAL': 0.0, 'PH': 0.0, 'CW': 0.0, 'DIG': 0.0}
     rate_last_datetime = -1
@@ -148,58 +153,68 @@ def main():
                 rate_last_datetime = datetime_on
             rate_diff_datetime = datetime_on - rate_last_datetime
 
-            if (rate_diff_datetime >= timedelta(minutes=5)):
+            if rate_diff_datetime >= timedelta(minutes=5):
                 for modes in mode_points:
-                    json_qso_points[0].update({'time' : datetime_on})
-                    json_qso_points[0]['fields'].update({'points' : mode_points[modes]})
-                    json_qso_points[0]['tags'].update({'mode' : modes})
+                    json_qso_points[0].update({'time': datetime_on})
+                    json_qso_points[0]['fields'].update({'Points': mode_points[modes]})
+                    json_qso_points[0]['fields'].update({'Contacts': mode_totals[modes]})
+                    json_qso_points[0]['tags'].update({'Mode': modes})
                     client.write_points(json_qso_points)
                 for op_key in op_counts.keys():
                     if op_counts[op_key] > 0:
-                        op_rates.update({op_key : ((op_counts[op_key] / rate_diff_datetime.seconds) * 3600.0)})
-                        json_op_rates[0].update({'time' : datetime_on})
-                        json_op_rates[0]['fields'].update({'rate' : op_rates[op_key]})
-                        json_op_rates[0]['tags'].update({'callsign' : callsign})
-                        json_op_rates[0]['tags'].update({'operator' : op_key})
+                        op_rates.update({op_key: ((op_counts[op_key] / rate_diff_datetime.seconds) * 3600.0)})
+                        json_op_rates[0].update({'time': datetime_on})
+                        json_op_rates[0]['fields'].update({'Rate': op_rates[op_key]})
+                        json_op_rates[0]['fields'].update({'Contacts': op_totals[op_key]})
+                        json_op_rates[0]['tags'].update({'Callsign': callsign})
+                        json_op_rates[0]['tags'].update({'Operator': op_key})
                         client.write_points(json_op_rates)
-                    op_counts.update({op_key : 0})
+                    op_counts.update({op_key: 0})
                 for mode_key in mode_counts.keys():
                     if mode_counts[mode_key] > 0:
-                        mode_rates.update({mode_key : ((mode_counts[mode_key] / rate_diff_datetime.seconds) * 3600.0)})
-                        json_mode_rates[0].update({'time' : datetime_on})
-                        json_mode_rates[0]['fields'].update({'rate' : mode_rates[mode_key]})
-                        json_mode_rates[0]['tags'].update({'callsign' : callsign})
-                        json_mode_rates[0]['tags'].update({'mode' : mode_key})
+                        mode_rates.update({mode_key: ((mode_counts[mode_key] / rate_diff_datetime.seconds) * 3600.0)})
+                        json_mode_rates[0].update({'time': datetime_on})
+                        json_mode_rates[0]['fields'].update({'Rate': mode_rates[mode_key]})
+                        json_mode_rates[0]['tags'].update({'Callsign': callsign})
+                        json_mode_rates[0]['tags'].update({'Mode': mode_key})
                         client.write_points(json_mode_rates)
-                    mode_counts.update({mode_key : 0})
+                    mode_counts.update({mode_key: 0})
                 rate_last_datetime = datetime_on
 
             if operator in op_counts:
-                op_counts.update({operator : (op_counts[operator] + 1)})
+                op_counts.update({operator: (op_counts[operator] + 1)})
+                op_totals.update({operator: (op_totals[operator] + 1)})
             else:
-                op_counts.update({operator : 1})
-            mode_counts.update({'TOTAL' : (mode_counts['TOTAL'] + 1)})
+                op_counts.update({operator: 1})
+                op_totals.update({operator: 1})
+            mode_counts.update({'TOTAL': (mode_counts['TOTAL'] + 1)})
+            mode_totals.update({'TOTAL': (mode_totals['TOTAL'] + 1)})
             if n3fjp_modecontest == 'PH':
                 mode_counts.update({'PH': (mode_counts['PH'] + 1)})
+                mode_totals.update({'PH': (mode_totals['PH'] + 1)})
                 mode_points.update({'PH': (mode_points['PH'] + 1)})
             elif n3fjp_modecontest == 'CW':
                 mode_counts.update({'CW': (mode_counts['CW'] + 1)})
+                mode_totals.update({'CW': (mode_totals['CW'] + 1)})
                 mode_points.update({'CW': (mode_points['CW'] + 2)})
             elif n3fjp_modecontest == 'DIG':
                 mode_counts.update({'DIG': (mode_counts['DIG'] + 1)})
+                mode_totals.update({'DIG': (mode_totals['DIG'] + 1)})
                 mode_points.update({'DIG': (mode_points['DIG'] + 2)})
             else:
-                print(n3fjp_modecontest)
+                print('What mode is this? ', n3fjp_modecontest)
             mode_points.update({'TOTAL': (mode_points['PH'] + mode_points['CW'] + mode_points['DIG'])})
 
-            json_qso_location[0].update({'time' : datetime_on})
-            json_qso_location[0]['fields'].update({'callsign' : callsign})
-            json_qso_location[0]['fields'].update({'state' : state})
-            json_qso_location[0]['fields'].update({'band' : band})
-            json_qso_location[0]['tags'].update({'operator' : operator})
-            json_qso_location[0]['tags'].update({'state' : state})
-            json_qso_location[0]['tags'].update({'band' : band})
-            json_qso_location[0]['tags'].update({'geohash' : geohash})
+            json_qso_location[0].update({'time': datetime_on})
+            json_qso_location[0]['fields'].update({'Callsign': callsign})
+            json_qso_location[0]['fields'].update({'State': state})
+            json_qso_location[0]['fields'].update({'Band': band})
+            json_qso_location[0]['fields'].update({'Mode': n3fjp_modecontest})
+            json_qso_location[0]['tags'].update({'Operator': operator})
+            json_qso_location[0]['tags'].update({'State': state})
+            json_qso_location[0]['tags'].update({'Band': band})
+            json_qso_location[0]['tags'].update({'Mode': n3fjp_modecontest})
+            json_qso_location[0]['tags'].update({'geohash': geohash})
             client.write_points(json_qso_location)
         time.sleep(2)
 
