@@ -34,7 +34,7 @@ from influxdb import InfluxDBClient
 def main():
 
     program_name = 'qsoviz'
-    program_version = '1.0'
+    program_version = '1.1'
     db_host = 'localhost'
     db_port = 8086
     db_name = 'aarc'
@@ -101,23 +101,17 @@ def main():
             }
         }
     ]
-    demo_mode = True
-    demo_timescale = 3600.0
 
     print(program_name, program_version)
 
-    key_fp = open('passwords.json', "r")
+    key_fp = open('passwords.json', 'r')
     json_return = json.load(key_fp)
     key_fp.close()
     db_password = json_return['db_password'].encode()
 
-    if demo_mode:
-        time_start = datetime(2016, 6, 25, 18, 0, 0, tzinfo=timezone.utc)
-        time_end = datetime(2016, 6, 26, 18, 0, 0, tzinfo=timezone.utc)
-    else:
-        time_start = datetime(2018, 6, 23, 18, 0, 0, tzinfo=timezone.utc)
-        time_end = datetime(2018, 6, 24, 18, 0, 0, tzinfo=timezone.utc)
-    last_loop_time = datetime.now(tz=timezone.utc)
+    time_start = datetime(2016, 6, 25, 18, 0, 0, tzinfo=timezone.utc)
+    time_end = datetime(2016, 6, 26, 18, 0, 0, tzinfo=timezone.utc)
+    last_loop_time = time_start
     time_query_end = time_start
 
     cnx = mysql.connector.connect(user=db_user, password=db_password, database=db_name)
@@ -141,7 +135,7 @@ def main():
         time_clock = datetime.now(tz=timezone.utc)
         time_elapsed = (time_clock - last_loop_time)
         time_query_start = time_query_end
-        time_query_end = (time_query_start + (time_elapsed * demo_timescale))
+        time_query_end = (time_query_start + time_elapsed)
         last_loop_time = time_clock
         mysql_data = (time_query_start, time_query_end)
         cursor.execute(mysql_query, mysql_data)
@@ -215,7 +209,7 @@ def main():
             json_qso_location[0]['tags'].update({'Mode': n3fjp_modecontest})
             json_qso_location[0]['tags'].update({'geohash': geohash})
             client.write_points(json_qso_location)
-        time.sleep(2)
+        print(datetime.now(tz=timezone.utc) - last_loop_time)
 
     cursor.close()
     cnx.close()
