@@ -29,7 +29,7 @@ import json
 import random
 from datetime import timedelta
 import mysql.connector
-from hamutils.adif import ADIReader
+from hamutils.adif import ADIReader, ADIWriter
 from qrz import QRZ
 import geohash2
 
@@ -53,33 +53,34 @@ def main():
     states_coords = json.load(states_fp)
     states_fp.close()
 
-    cnx = mysql.connector.connect(user=db_user, password=db_password, database=db_name)
-    cursor = cnx.cursor()
-    cursor.execute("DELETE FROM aarc_fd")
-    cnx.commit()
+    mysql_cnx = mysql.connector.connect(user=db_user, password=db_password, database=db_name)
+    mysql_cursor = mysql_cnx.cursor()
+    mysql_cursor.execute("DELETE FROM aarc_fd")
+    mysql_cnx.commit()
     add_qso = ("INSERT INTO aarc_fd "
                "(datetime_on, callsign, n3fjp_modecontest, band, state, arrl_sect, country, "
                + "n3fjp_initials, operator, class, latitude, longitude, geohash) "
                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
     query_qso = "SELECT datetime_on, callsign FROM aarc_fd WHERE datetime_on = %s"
 
-    adif_fp = open('aarcfd2016.adi', 'r')
-    aarc_adi = ADIReader(adif_fp)
-    for qso in aarc_adi:
+    adif_fp = open('/home/qsoviz/qsoviz/aarcfd.adi', 'r')
+    qsos = ADIReader(adif_fp)
+
+    for qso in qsos:
         a_datetime_on = qso['datetime_on']
         query_qso_data = (a_datetime_on,)
-        cursor.execute(query_qso, query_qso_data)
-        result = cursor.fetchall()
+        mysql_cursor.execute(query_qso, query_qso_data)
+        result = mysql_cursor.fetchall()
         if result:
             print(result)
             a_datetime_on = qso['datetime_on'] + timedelta(seconds=random.random())
         a_callsign = qso['call'].upper()
-        a_n3fjp_modecontest = qso.get('n3fjp_modecontest', 'NONE').upper()
+        a_n3fjp_modecontest = qso.get('mode', 'NONE').upper()
         a_band = qso.get('band', 'NONE').upper()
         a_state = qso.get('state', 'NONE').upper()
         a_arrl_sect = qso.get('arrl_sect', 'NONE').upper()
         a_country = qso.get('country', 'NONE').upper()
-        a_n3fjp_initials = qso.get('n3fjp_initials', 'NONE').upper()
+        a_n3fjp_initials = qso.get('app_n3fjp_initials', 'NONE').upper()
         a_operator = qso.get('operator', 'NONE').upper()
         a_class = qso.get('class', 'NONE').upper()
         try:
@@ -95,11 +96,11 @@ def main():
         a_geohash = geohash2.encode(a_latitude, a_longitude, precision=5)
         add_qso_data = (a_datetime_on, a_callsign, a_n3fjp_modecontest, a_band, a_state, a_arrl_sect, a_country,
                         a_n3fjp_initials, a_operator, a_class, a_latitude, a_longitude, a_geohash)
-        cursor.execute(add_qso, add_qso_data)
-        cnx.commit()
+        mysql_cursor.execute(add_qso, add_qso_data)
+        mysql_cnx.commit()
     adif_fp.close()
-    cursor.close()
-    cnx.close()
+    mysql_cursor.close()
+    mysql_cnx.close()
 
 
 if __name__ == "__main__":
