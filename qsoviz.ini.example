@@ -1,0 +1,14 @@
+[general]
+debug = False
+use_n3fjp_mdb = True
+reset_mysql_db = False
+reset_influxdb_db = False
+stations = 'STATION1', 'STATION2', 'STATION3'
+ignore_operators = '', 'W0DO', 'W1DO', 'W2DO', 'W3DO', 'W4DO', 'W5DO', 'W6DO', 'W7DO', 'W8DO', 'W9DO'
+
+[mysql]
+db_name = your_database_name
+db_user = your_database_username
+db_password = your_database_password
+db_host = your_InfluxDB_host
+db_port = your_InfluxDB_port
